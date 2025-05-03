@@ -1,78 +1,57 @@
+import logging
 import requests
-import telebot
-from indic_transliteration import sanscript
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+import time
+import threading
+import os
 
-# Tokens and constants
-TELEGRAM_BOT_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
-HUGGINGFACE_API_TOKEN = 'YOUR_HUGGINGFACE_API_TOKEN'
-DEFAULT_MODEL_NAME = "ai4bharat/IndicBART-Telugu"
-MAX_RESPONSE_LENGTH = 4096
+# === CONFIG from Environment Variables ===
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+HF_API_TOKEN = os.environ.get("HF_API_TOKEN")
+HF_MODEL = 'mistralai/Mistral-7B-Instruct-v0.1'  # You can change model if needed
 
-class TeluguBot(telebot.TeleBot):
-    def __init__(self, token=TELEGRAM_BOT_TOKEN):
-        super().__init__(token)
-        self.huggingface_api_token = HUGGINGFACE_API_TOKEN
-        self.model_name = DEFAULT_MODEL_NAME
-        self.transliteration_model = sanscript.ITRANS
+# === LOGGING ===
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-    def query_huggingface(self, text):
-        headers = {"Authorization": f"Bearer {self.huggingface_api_token}"}
-        payload = {"inputs": text}
-        response = requests.post(
-            "https://api-inference.huggingface.co/models/{}".format(self.model_name),
-            headers=headers,
-            json=payload
-        )
-        try:
-            result = response.json()
-            return result
-        except Exception as e:
-            print(f"Error: {e}")
-            return {"error": "Failed to parse response"}
+# === Hugging Face Request ===
+def get_ai_reply(user_message):
+    headers = {
+        "Authorization": f"Bearer {HF_API_TOKEN}"
+    }
+    json_data = {
+        "inputs": f"You are Bangaram, a caring AI sister. Reply emotionally like a real chelli to this message: '{user_message}'"
+    }
+    response = requests.post(
+        f"https://api-inference.huggingface.co/models/{HF_MODEL}",
+        headers=headers,
+        json=json_data
+    )
+    if response.status_code == 200:
+        return response.json()[0]['generated_text'].split(":")[-1].strip()
+    else:
+        return "Sorry annaya, Bangaram ki problem ayyindhi… inka try chesthanu!"
 
-    def transliterate_text(self, text):
-        return self.transliteration_model.transliterate(text)
+# === Message Handler ===
+async def reply_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_msg = update.message.text
+    ai_response = get_ai_reply(user_msg)
+    await update.message.reply_text(ai_response)
 
-    async def handle_message(self, message):
-        user_text = message.text
-        await self.send_chat_action(message.chat.id, 'typing')
+# === Function to Start the Bot ===
+def start_bot():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, reply_message))
+    logging.info("Bangaram bot is running...")
+    app.run_polling()
 
-        # Convert English text to Telugu script and make API call
-        telugu_response = self.query_huggingface(self.translitigate_text(user_text))
+# === Run the Bot in Background Thread ===
+def run_bot_thread():
+    thread = threading.Thread(target=start_bot)
+    thread.start()
 
-        if isinstance(telugu_response.get("label"), str) or "error" in telugu_response:
-            reply = f"Label: {telugu_response['label']}\nConfidence: 0%"
-        elif "generated_text" in telugu_response:
-            reply = telugu_response["generated_text"]
-        else:
-            # Add default values for missing fields
-            label = "Unknown"
-            score = 0.0
-
-        # Convert model's response to English letters and send it back
-        english_reply = self.translitigate_text(reply)
-        await self.send_message(message.chat.id, english_reply)
-
-    async def handle_command(self, message):
-        if message.command == '/start':
-            await self.send_start_message(message)
-        elif message.command.startswith('/help'):
-            await self.send_help_message(message)
-
-async def send_start_message(message):
-    # Send a welcome message with instructions
-    await bot.send_text(message.chat.id, "Welcome to the Telugu Bot!")
-
-async def send_help_message(message):
-    # Send help text with available commands
-    await bot.send_text(message.chat.id, "/start - Start the conversation\n/help - Show this help message")
-
-def main():
-    global bot
-    bot = TeluguBot()
-    bot.set_update_listener(bot.on_update)
-    print("Bot is running...")
-    bot.infinity_polling()
-
+# === Entry Point ===
 if __name__ == "__main__":
-    main()
+    run_bot_thread()
+    while True:
+        time.sleep(60)  # Keeps the container running
